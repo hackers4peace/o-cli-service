@@ -7,7 +7,7 @@
 * get resource ( from fork db )
  * [x] as expanded JSON-LD
  * [ ] as compacted JSON-LD
-* [ ] import data ( to fork db from JSON-LD with graph names )
+* [x] import data ( to fork db from JSON-LD with graph names )
 * [ ] export data ( from fork db - the whole account to JSON-LD with graph names )
 * [ ] create idp account ( with default container rel: "sec:publicKey" )
  * /(:uuid)#id - identity
