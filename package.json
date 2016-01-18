@@ -17,11 +17,9 @@
   },
   "homepage": "https://github.com/hackers4peace/o-cli-service#readme",
   "dependencies": {
-    "forkdb": "^9.2.1",
-    "forkdb-promise": "github:hackers4peace/forkdb-promise",
     "gulp": "^3.9.0",
     "jsonld": "^0.4.4",
-    "level": "^1.4.0",
+    "o-storage-forkdb": "0.0.1",
     "yargs": "^3.31.0"
   },
   "devDependencies": {

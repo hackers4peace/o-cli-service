@@ -1,26 +1,8 @@
 import gulp from 'gulp'
 import { argv } from 'yargs'
 import fs from 'fs'
-import level from 'level'
-import forkdb from 'forkdb'
-import forkp from 'forkdb-promise'
+import Storage from 'o-storage-forkdb'
 import { promises as jsonld } from 'jsonld'
-
-/*
- * TODO support aliasing services in local config
- */
-function getDb (configPath) {
-  let config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-  let fdb = forkdb(level(config.db.level), {dir: config.db.fork})
-  return {
-    put: (uri, doc) => {
-      return forkp.put(fdb, uri, doc)
-    },
-    get: (uri) => {
-      return forkp.get(fdb, uri)
-    }
-  }
-}
 
 /*
  * assumes JSON-LD file
@@ -30,7 +12,8 @@ gulp.task('db:put', () => {
   console.log('db:put config: ', argv.config)
   console.log('db:put path: ', argv.path)
   console.log('db:put uri: ', argv.uri)
-  let db = getDb(argv.config)
+  let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
+  let db = new Storage(config.db)
   let doc = JSON.parse(fs.readFileSync(argv.path, 'utf8'))
   jsonld.normalize(doc, { algorithm: 'URDNA2015', format: 'application/nquads' })
     .then((normalized) => {
@@ -50,7 +33,8 @@ gulp.task('db:put', () => {
 gulp.task('db:get', () => {
   console.log('db:get config: ', argv.config)
   console.log('db:get uri: ', argv.uri)
-  let db = getDb(argv.config)
+  let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
+  let db = new Storage(config.db)
   db.get(argv.uri)
     .then((doc) => {
       return jsonld.fromRDF(doc, { format: 'application/nquads' })
