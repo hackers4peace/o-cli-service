@@ -4,6 +4,7 @@ import fs from 'fs'
 import Storage from 'o-storage-forkdb'
 import { promises as jsonld } from 'jsonld'
 import _ from 'lodash'
+import uuid from 'uuid'
 
 function put(db, uri, doc) {
   return jsonld.normalize(doc, { algorithm: 'URDNA2015', format: 'application/nquads' })
@@ -14,6 +15,15 @@ function put(db, uri, doc) {
         uri: uri,
         hash: hash
       }
+    })
+}
+
+function imp(db, doc) {
+  return jsonld.expand(doc)
+    .then((expanded) => {
+      return Promise.all(_.map(expanded[0], (value, key) => {
+        return put(db, key, value)
+      }))
     })
 }
 
@@ -66,15 +76,74 @@ gulp.task('db:import', () => {
   let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
   let db = new Storage(config.db)
   let doc = JSON.parse(fs.readFileSync(argv.path, 'utf8'))
-  jsonld.expand(doc)
-    .then((expanded) => {
-      return Promise.all(_.map(expanded[0], (value, key) => {
-        return put(db, key, value)
-      }))
-    }).then((arr) => {
+  imp(db, doc)
+    .then((arr) => {
       return arr.forEach((result) => {
         console.log('db:import uri: ', result.uri)
         console.log('db:import hash:', result.hash)
+      })
+    }).catch((err) => {
+      console.log(err)
+    })
+})
+
+gulp.task('idp:new', () => {
+  console.log('idp:new config: ', argv.config)
+  console.log('idp:new name: ', argv.name)
+  let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
+  let db = new Storage(config.db)
+  let doc = { '@context': 'https://w3id.org/plp/v1' }
+  let baseUri = config.hapi.baseUri + uuid.v4()
+  let id = baseUri + '#id'
+    let profile = {
+    "id": id,
+    "type": [ "foaf:Person", "schema:Person", "as:Person" ],
+    "name": argv.name
+  }
+  let container = {
+    "id": baseUri + '/' + uuid.v4(),
+    "type": "Container",
+    "resource": id,
+    "rel": "sec:publicKey"
+  }
+  doc[baseUri] = [ profile, container ]
+  doc[container.id] = [ container ]
+  imp(db, doc)
+    .then((arr) => {
+      return arr.forEach((result) => {
+        console.log('idp:new uri: ', result.uri)
+        console.log('idp:new hash:', result.hash)
+      })
+    }).catch((err) => {
+      console.log(err)
+    })
+})
+
+gulp.task('ws:new', () => {
+  console.log('ws:new config: ', argv.config)
+  console.log('ws:new identity: ', argv.identity)
+  let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
+  let db = new Storage(config.db)
+  let doc = { '@context': 'https://w3id.org/plp/v1' }
+  let baseUri = config.hapi.baseUri + uuid.v4()
+  let profile = {
+    "id": baseUri + '/' + uuid.v4(),
+    "type": [ "foaf:ProfileDocument", "as:Profile" ],
+    "describes": argv.identity
+  }
+  let container = {
+    "id": baseUri + '/' + uuid.v4(),
+    "type": "Container",
+    "resource": argv.identity,
+    "rev": [ "as:actor", "schema:agent" ]
+  }
+  doc[profile.id] = [ profile, container ]
+  doc[container.id] = [ container ]
+  imp(db, doc)
+    .then((arr) => {
+      return arr.forEach((result) => {
+        console.log('ws:new uri: ', result.uri)
+        console.log('ws:new hash:', result.hash)
       })
     }).catch((err) => {
       console.log(err)

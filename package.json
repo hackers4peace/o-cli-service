@@ -21,6 +21,7 @@
     "jsonld": "^0.4.4",
     "lodash": "^4.0.0",
     "o-storage-forkdb": "0.0.1",
+    "uuid": "^2.0.1",
     "yargs": "^3.31.0"
   },
   "devDependencies": {
