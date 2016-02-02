@@ -2,47 +2,50 @@ import gulp from 'gulp'
 import { argv } from 'yargs'
 import fs from 'fs'
 import Storage from 'o-storage-forkdb'
+import Dataset from 'o-utils-dataset'
 import { promises as jsonld } from 'jsonld'
 import _ from 'lodash'
 import uuid from 'uuid'
 
-const PLP_CONTEXT = 'https://w3id.org/plp/v1'
-
-function put(db, uri, doc) {
-  return jsonld.normalize(doc, { algorithm: 'URDNA2015', format: 'application/nquads' })
-    .then((normalized) => {
-      return db.put(uri, normalized)
-    }).then((hash) => {
-      return {
-        uri: uri,
-        hash: hash
-      }
-    })
+const prefixes = {
+  sec: 'https://w3id.org/security#',
+  ldp: 'http://www.w3.org/ns/ldp#',
+  as: 'http://www.w3.org/ns/activitystreams#',
+  foaf: 'http://xmlns.com/foaf/0.1/',
+  schema: 'http://schema.org/'
 }
 
-function get(db, uri, context) {
-  return db.get(uri)
-    .then((normalized) => {
-      return jsonld.fromRDF(normalized, { format: 'application/nquads' })
-    }).then((expanded) => {
-      if (context) {
-        return jsonld.compact(expanded, context)
-      } else {
-        return expanded
-      }
-    }).then((json) => {
-      return json
-    })
+const aliases = {
+  rel: expand('ldp:hasMemberRelation'),
+  rev: expand('ldp:isMemberOfRelation'),
+  resource: expand('ldp:membershipResource')
 }
 
-function imp(db, doc) {
-  return jsonld.expand(doc)
+function expand (string) {
+  if (string.match(':')) {
+    let [ prefix, term ] = string.split(':')
+    return prefixes[prefix] + term
+  } else if (aliases[string]) {
+    return aliases[string]
+  }
+}
+
+/*
+ * prints document as expanded JSON-LD
+ */
+gulp.task('db:get', () => {
+  console.log('db:get config: ', argv.config)
+  console.log('db:get uri: ', argv.uri)
+  let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
+  let db = new Storage(config.db)
+  let dataset = new Dataset(db)
+  dataset.getResource(argv.uri)
     .then((expanded) => {
-      return Promise.all(_.map(expanded[0], (value, key) => {
-        return put(db, key, value)
-      }))
+      return console.log(JSON.stringify(expanded))
+    }).catch((err) => {
+      console.log(err)
     })
-}
+})
 
 /*
  * assumes JSON-LD file
@@ -50,32 +53,15 @@ function imp(db, doc) {
  */
 gulp.task('db:put', () => {
   console.log('db:put config: ', argv.config)
-  console.log('db:put path: ', argv.path)
   console.log('db:put uri: ', argv.uri)
+  console.log('db:put path: ', argv.path)
   let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
   let db = new Storage(config.db)
+  let dataset = new Dataset(db)
   let doc = JSON.parse(fs.readFileSync(argv.path, 'utf8'))
-  put(db, argv.uri, doc)
-    .then((result) => {
-      return console.log('db:put hash:', result.hash)
-    }).catch((err) => {
-      console.log(err)
-    })
-})
-
-/*
- * gets Normalized RDF
- * prints as expanded JSON-LD
- * TODO: add support for JSON-LD compaction using --context
- */
-gulp.task('db:get', () => {
-  console.log('db:get config: ', argv.config)
-  console.log('db:get uri: ', argv.uri)
-  let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
-  let db = new Storage(config.db)
-  get(db, argv.uri, argv.context)
-    .then((json) => {
-      return console.log(JSON.stringify(json))
+  dataset.updateResource(argv.uri, doc)
+    .then((resourceUri) => {
+      return console.log('db:put saved:', resourceUri)
     }).catch((err) => {
       console.log(err)
     })
@@ -90,12 +76,16 @@ gulp.task('db:import', () => {
   console.log('db:import path: ', argv.path)
   let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
   let db = new Storage(config.db)
+  let dataset = new Dataset(db)
   let doc = JSON.parse(fs.readFileSync(argv.path, 'utf8'))
-  imp(db, doc)
-    .then((arr) => {
-      return arr.forEach((result) => {
-        console.log('db:import uri: ', result.uri)
-        console.log('db:import hash:', result.hash)
+  jsonld.expand(doc)
+    .then((expanded) => {
+      return Promise.all(_.map(expanded[0], (value, key) => {
+        return dataset.updateResource(key, value)
+      }))
+    }).then((arr) => {
+      return arr.forEach((resourceUri) => {
+        console.log('db:import saved: ', resourceUri)
       })
     }).catch((err) => {
       console.log(err)
@@ -107,28 +97,28 @@ gulp.task('idp:new', () => {
   console.log('idp:new name: ', argv.name)
   let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
   let db = new Storage(config.db)
-  let doc = { '@context': PLP_CONTEXT }
-  let baseUri = config.hapi.baseUri + uuid.v4()
-  let id = baseUri + '#id'
-  let profile = {
-    "id": id,
-    "type": [ "foaf:Person", "schema:Person", "as:Person" ],
-    "name": argv.name
+  let dataset = new Dataset(db)
+  let uriSpace = config.hapi.baseUri + uuid.v4() + '/'
+  let identity = {
+    '@id': uriSpace.replace(/\/$/, '#id'),
+    '@type': [ expand('foaf:Person'), expand('schema:Person'), expand('as:Person') ],
+    [ expand('schema:name') ]: argv.name
   }
-  let container = {
-    "id": baseUri + '/' + uuid.v4(),
-    "type": "Container",
-    "resource": id,
-    "rel": "sec:publicKey"
+  let containerUri = uriSpace + uuid.v4()
+  let link = {
+    [ expand('rel') ]: expand('sec:publicKey')
   }
-  doc[baseUri] = [ profile, container ]
-  doc[container.id] = [ container ]
-  imp(db, doc)
-    .then((arr) => {
-      return arr.forEach((result) => {
-        console.log('idp:new uri: ', result.uri)
-        console.log('idp:new hash:', result.hash)
-      })
+  dataset.createResource(identity['@id'].replace('#id', ''), identity)
+    .then((resourceUri) => {
+      console.log('idp:new created identity resource: ', resourceUri)
+      return dataset.createLinkedContainer(containerUri, identity['@id'], link)
+    }).then((containerUri) => {
+      console.log('idp:new created container: ', containerUri)
+      return dataset.getResource(containerUri)
+    }).then((container) => {
+      return dataset.appendToResource(identity['@id'].replace('#id', ''), container)
+    }).then((resourceUri) => {
+      console.log('idp:new added container to identity resource: ', resourceUri)
     }).catch((err) => {
       console.log(err)
     })
@@ -146,37 +136,26 @@ gulp.task('idp:add:key', () => {
   let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
   let pub = fs.readFileSync(argv.pem, 'utf8')
   let db = new Storage(config.db)
-  let doc = { '@context': PLP_CONTEXT }
-  let baseUri = argv.identity.replace('#id', '/')
+  let dataset = new Dataset(db)
+  let uriSpace = argv.identity.replace('#id', '/')
   let key = {
-    "id": baseUri + uuid.v4() + '#id',
-    "type": "sec:Key",
-    "sec:owner": argv.identity,
-    "sec:publicKeyPem": pub
+    '@id': uriSpace + uuid.v4() + '#id',
+    '@type': expand('sec:Key'),
+    [ expand('sec:owner') ]: { '@id': argv.identity },
+    [ expand('sec:publicKeyPem') ]: pub
 
   }
-  doc[key.id.replace('#id', '')] = [ key ]
-  get(db, argv.identity.replace('#id', ''), PLP_CONTEXT)
-    .then((json) => {
-      return _.find(json['@graph'], (obj) => {
-        return obj.rel === 'sec:publicKey'
-      })
-    }).then((link) => {
-      return get(db, link.id, PLP_CONTEXT)
-    }).then((container) => {
-      if (!container['ldp:member']) {
-        container['ldp:member'] = []
-      } else if (typeof(container['ldp:member'] === 'string')) {
-        container['ldp:member'] = [ container['ldp:member'] ]
+  dataset.createResource(key['@id'].replace('#id', ''), key)
+    .then((resourceUri) => {
+      console.log('idp:add:key created resource for key: ', resourceUri)
+      let link = {
+        [ expand('rel') ]: expand('sec:publicKey')
       }
-      container['ldp:member'].push(key.id)
-      doc[container.id] = [ container ]
-      return imp(db, doc)
-    }).then((arr) => {
-      return arr.forEach((result) => {
-        console.log('idp:add:key uri: ', result.uri)
-        console.log('idp:add:key hash:', result.hash)
-      })
+      return dataset.getLinkedContainer(argv.identity.replace('#id', ''), link)
+    }).then((container) => {
+      return dataset.addMemberToContainer(container[0]['@id'], key['@id'])
+    }).then((containerUri) => {
+      console.log('idp:add:key updated container: ', containerUri)
     }).catch((err) => {
       console.log(err)
     })
@@ -188,20 +167,17 @@ gulp.task('idp:add:profile', () => {
   console.log('idp:add:profile profile: ', argv.profile)
   let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
   let db = new Storage(config.db)
-  let doc = { '@context': PLP_CONTEXT }
+  let dataset = new Dataset(db)
   let profile = {
-    "id": argv.profile,
-    "type": [ "foaf:ProfileDocument", "as:Profile" ],
-    "as:describes": argv.identity
+    '@id': argv.profile,
+    '@type': [ expand('foaf:ProfileDocument'), expand('as:Profile') ],
+    [ expand('foaf:primaryTopic') ]: { '@id': argv.identity }
 
   }
-  let uri = argv.identity.replace('#id', '')
-  get(db, uri, PLP_CONTEXT)
-    .then((json) => {
-      json['@graph'].push(profile)
-      return put(db, uri, json)
-    }).then((result) => {
-      return console.log('idp:add:profile hash:', result.hash)
+  let resourceUri = argv.identity.replace('#id', '')
+  dataset.appendToResource(resourceUri, profile)
+    .then((uri) => {
+      return console.log('idp:add:profile updated:', uri)
     }).catch((err) => {
       console.log(err)
     })
@@ -212,27 +188,28 @@ gulp.task('ws:new', () => {
   console.log('ws:new identity: ', argv.identity)
   let config = JSON.parse(fs.readFileSync(argv.config, 'utf8'))
   let db = new Storage(config.db)
-  let doc = { '@context': PLP_CONTEXT }
-  let baseUri = config.hapi.baseUri + uuid.v4()
+  let dataset = new Dataset(db)
+  let uriSpace = config.hapi.baseUri + uuid.v4() + '/'
   let profile = {
-    "id": baseUri + '/' + uuid.v4(),
-    "type": [ "foaf:ProfileDocument", "as:Profile" ],
-    "describes": argv.identity
+    '@id': uriSpace + uuid.v4(),
+    '@type': [ expand('foaf:ProfileDocument'), expand('as:Profile') ],
+    [ expand('foaf:primaryTopic') ]: { '@id': argv.identity }
   }
-  let container = {
-    "id": baseUri + '/' + uuid.v4(),
-    "type": "Container",
-    "resource": argv.identity,
-    "rev": [ "as:actor", "schema:agent" ]
+  let containerUri = uriSpace + uuid.v4()
+  let link = {
+    [ expand('rev') ]:  [ { '@id': expand('as:actor') }, { '@id': expand('schema:agent') } ]
   }
-  doc[profile.id] = [ profile, container ]
-  doc[container.id] = [ container ]
-  imp(db, doc)
-    .then((arr) => {
-      return arr.forEach((result) => {
-        console.log('ws:new uri: ', result.uri)
-        console.log('ws:new hash:', result.hash)
-      })
+  dataset.createResource(profile['@id'], profile)
+    .then((profileUri) => {
+      console.log('ws:new created profile: ', profileUri)
+      return dataset.createLinkedContainer(containerUri, argv.identity, link)
+    }).then((containerUri) => {
+      console.log('ws:new created container: ', containerUri)
+      return dataset.getResource(containerUri)
+    }).then((container) => {
+      return dataset.appendToResource(profile['@id'], container)
+    }).then((resourceUri) => {
+      console.log('ws:new added container to profile: ', resourceUri)
     }).catch((err) => {
       console.log(err)
     })
