@@ -6,6 +6,16 @@ import Dataset from 'o-utils-dataset'
 import { promises as jsonld } from 'jsonld'
 import _ from 'lodash'
 import uuid from 'uuid'
+import JsonldSerializer from 'rdf-serializer-jsonld'
+import JsonldParser from 'rdf-parser-jsonld'
+
+const parsers = {
+  jsonld: new JsonldParser()
+}
+
+const serializers = {
+  jsonld: new JsonldSerializer()
+}
 
 const prefixes = {
   sec: 'https://w3id.org/security#',
@@ -40,8 +50,10 @@ gulp.task('db:get', () => {
   let db = new Storage(config.db)
   let dataset = new Dataset(db)
   dataset.getResource(argv.uri)
-    .then((expanded) => {
-      return console.log(JSON.stringify(expanded))
+    .then((graph) => {
+      return serializers.jsonld.serialize(graph)
+    }).then((json) => {
+      return console.log(JSON.stringify(json))
     }).catch((err) => {
       console.log(err)
     })
@@ -59,8 +71,10 @@ gulp.task('db:put', () => {
   let db = new Storage(config.db)
   let dataset = new Dataset(db)
   let doc = JSON.parse(fs.readFileSync(argv.path, 'utf8'))
-  dataset.updateResource(argv.uri, doc)
-    .then((resourceUri) => {
+  parsers.jsonld.parse(doc)
+    .then((graph) => {
+      return dataset.updateResource(argv.uri, graph)
+    }).then((resourceUri) => {
       return console.log('db:put saved:', resourceUri)
     }).catch((err) => {
       console.log(err)
@@ -81,7 +95,10 @@ gulp.task('db:import', () => {
   jsonld.expand(doc)
     .then((expanded) => {
       return Promise.all(_.map(expanded[0], (value, key) => {
-        return dataset.updateResource(key, value)
+        return parsers.jsonld.parse(value)
+          .then((graph) => {
+            return dataset.updateResource(key, graph)
+          })
       }))
     }).then((arr) => {
       return arr.forEach((resourceUri) => {
@@ -106,21 +123,23 @@ gulp.task('idp:new', () => {
   }
   let containerUri = uriSpace + uuid.v4()
   let link = {
-    [ expand('rel') ]: expand('sec:publicKey')
+    [ expand('rel') ]: { '@id': expand('sec:publicKey') }
   }
-  dataset.createResource(identity['@id'].replace('#id', ''), identity)
-    .then((resourceUri) => {
+  parsers.jsonld.parse(identity)
+    .then((graph) => {
+      return dataset.createResource(identity['@id'].replace('#id', ''), graph)
+    }).then((resourceUri) => {
       console.log('idp:new created identity resource: ', resourceUri)
       return dataset.createLinkedContainer(containerUri, identity['@id'], link)
     }).then((containerUri) => {
       console.log('idp:new created container: ', containerUri)
       return dataset.getResource(containerUri)
-    }).then((container) => {
-      return dataset.appendToResource(identity['@id'].replace('#id', ''), container)
+    }).then((graph) => {
+      return dataset.appendToResource(identity['@id'].replace('#id', ''), graph)
     }).then((resourceUri) => {
       console.log('idp:new added container to identity resource: ', resourceUri)
     }).catch((err) => {
-      console.log(err)
+      console.log('idp:new catched: ', err)
     })
 })
 
@@ -145,15 +164,17 @@ gulp.task('idp:add:key', () => {
     [ expand('sec:publicKeyPem') ]: pub
 
   }
-  dataset.createResource(key['@id'].replace('#id', ''), key)
-    .then((resourceUri) => {
+  parsers.jsonld.parse(key)
+    .then((graph) => {
+      return dataset.createResource(key['@id'].replace('#id', ''), graph)
+    }).then((resourceUri) => {
       console.log('idp:add:key created resource for key: ', resourceUri)
       let link = {
         [ expand('rel') ]: expand('sec:publicKey')
       }
-      return dataset.getLinkedContainer(argv.identity.replace('#id', ''), link)
-    }).then((container) => {
-      return dataset.addMemberToContainer(container[0]['@id'], key['@id'])
+      return dataset.getLinkedContainerUri(argv.identity.replace('#id', ''), link)
+    }).then((containerUri) => {
+      return dataset.addMemberToContainer(containerUri, key['@id'])
     }).then((containerUri) => {
       console.log('idp:add:key updated container: ', containerUri)
     }).catch((err) => {
@@ -175,8 +196,10 @@ gulp.task('idp:add:profile', () => {
 
   }
   let resourceUri = argv.identity.replace('#id', '')
-  dataset.appendToResource(resourceUri, profile)
-    .then((uri) => {
+  parsers.jsonld.parse(profile)
+    .then((graph) => {
+      return dataset.appendToResource(resourceUri, graph)
+    }).then((uri) => {
       return console.log('idp:add:profile updated:', uri)
     }).catch((err) => {
       console.log(err)
@@ -199,15 +222,17 @@ gulp.task('ws:new', () => {
   let link = {
     [ expand('rev') ]:  [ { '@id': expand('as:actor') }, { '@id': expand('schema:agent') } ]
   }
-  dataset.createResource(profile['@id'], profile)
-    .then((profileUri) => {
+  parsers.jsonld.parse(profile)
+    .then((graph) => {
+      return dataset.createResource(profile['@id'], graph)
+    }).then((profileUri) => {
       console.log('ws:new created profile: ', profileUri)
       return dataset.createLinkedContainer(containerUri, argv.identity, link)
     }).then((containerUri) => {
       console.log('ws:new created container: ', containerUri)
       return dataset.getResource(containerUri)
-    }).then((container) => {
-      return dataset.appendToResource(profile['@id'], container)
+    }).then((graph) => {
+      return dataset.appendToResource(profile['@id'], graph)
     }).then((resourceUri) => {
       console.log('ws:new added container to profile: ', resourceUri)
     }).catch((err) => {

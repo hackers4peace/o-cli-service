@@ -22,6 +22,8 @@
     "lodash": "^4.0.0",
     "o-storage-forkdb": "0.0.1",
     "o-utils-dataset": "0.0.1",
+    "rdf-parser-jsonld": "^0.3.0",
+    "rdf-serializer-jsonld": "^0.3.0",
     "uuid": "^2.0.1",
     "yargs": "^3.31.0"
   },
